@@ -116,7 +116,7 @@ class NaverDomesticStockClient implements NaverStockDataClient {
     // Goal:
     // - Deduplicate the incoming symbols.
     // - Return an empty map when there is nothing to request.
-    // - Build query=SERVICE_ITEM:005930|SERVICE_ITEM:000660 style payload.
+    // - Build query=SERVICE_ITEM:005930,000660 style payload.
     // - Call https://polling.finance.naver.com/api/realtime.
     // - Decode the JSON body, then traverse result -> areas -> datas.
     // - Convert each realtime row with NaverRealtimeQuoteDto.fromJson.

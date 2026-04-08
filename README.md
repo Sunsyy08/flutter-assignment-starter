@@ -180,7 +180,7 @@ GET https://polling.finance.naver.com/api/realtime
 
 주요 query parameter:
 
-- `query`: `SERVICE_ITEM:005930|SERVICE_ITEM:000660` 같은 형태
+- `query`: `SERVICE_ITEM:005930,000660` 같은 형태
 
 응답에서 주로 사용하는 필드:
 
