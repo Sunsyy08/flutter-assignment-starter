@@ -25,8 +25,17 @@ class NaverAutocompleteItemDto {
     // - url
     // - nationCode
     // - category
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverAutocompleteItemDto.fromJson',
+
+    // 네이버 자동완성 API 응답을 그대로 필드에 매핑
+    // _readString으로 null/빈값 방어 처리 (API 스펙 변경 대비)
+    return NaverAutocompleteItemDto(
+      code: _readString(json['code']),
+      name: _readString(json['name']),
+      typeCode: _readString(json['typeCode']),
+      typeName: _readString(json['typeName']),
+      url: _readString(json['url']),
+      nationCode: _readString(json['nationCode']),
+      category: _readString(json['category']),
     );
   }
 
@@ -40,9 +49,9 @@ class NaverAutocompleteItemDto {
 
   bool get isDomesticStock =>
       category == 'stock' &&
-      nationCode == 'KOR' &&
-      RegExp(r'^\d{6}$').hasMatch(code) &&
-      url.contains('/domestic/stock/');
+          nationCode == 'KOR' &&
+          RegExp(r'^\d{6}$').hasMatch(code) &&
+          url.contains('/domestic/stock/');
 }
 
 class NaverRealtimeQuoteDto {
@@ -69,8 +78,20 @@ class NaverRealtimeQuoteDto {
     // - lv: low price
     // - aq: accumulated trading volume
     // - countOfListedStock: listed share count (optional)
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverRealtimeQuoteDto.fromJson',
+
+    // 네이버 실시간 시세 API는 약자 키 사용
+    // cd=심볼, nv=현재가, pcv=전일종가, ov=시가, hv=고가, lv=저가, aq=거래량
+    // _readDouble/_readInt로 숫자가 문자열로 올 때도 안전하게 파싱
+    return NaverRealtimeQuoteDto(
+      symbol: _readString(json['cd']),
+      currentPrice: _readDouble(json['nv']),
+      previousClose: _readDouble(json['pcv']),
+      openPrice: _readDouble(json['ov']),
+      highPrice: _readDouble(json['hv']),
+      lowPrice: _readDouble(json['lv']),
+      accumulatedTradingVolume: _readInt(json['aq']),
+      // countOfListedStock은 없을 수도 있어서 nullable로 받고 기본값 0
+      countOfListedStock: _readNullableInt(json['countOfListedStock']) ?? 0,
     );
   }
 
@@ -106,8 +127,12 @@ class NaverChartMetadataDto {
 
   factory NaverChartMetadataDto.fromJson(Map<String, dynamic> json) {
     // TODO(assignment): Map the chart metadata payload into this DTO.
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverChartMetadataDto.fromJson',
+
+    // 종목 기본정보: 심볼코드, 종목명, 거래소명
+    return NaverChartMetadataDto(
+      symbol: _readString(json['symbolCode']),
+      stockName: _readString(json['stockName']),
+      stockExchangeNameKor: _readString(json['stockExchangeNameKor']),
     );
   }
 
@@ -128,8 +153,16 @@ class NaverHistoricalPriceDto {
 
   factory NaverHistoricalPriceDto.fromJson(Map<String, dynamic> json) {
     // TODO(assignment): Parse one historical OHLCV row.
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverHistoricalPriceDto.fromJson',
+
+    // 일별 시세 한 줄: 날짜(yyyyMMdd) + OHLCV
+    // _readLocalDate가 '20260327' → DateTime(2026,3,27)으로 변환
+    return NaverHistoricalPriceDto(
+      localDate: _readLocalDate(json['localDate']),
+      closePrice: _readDouble(json['closePrice']),
+      openPrice: _readDouble(json['openPrice']),
+      highPrice: _readDouble(json['highPrice']),
+      lowPrice: _readDouble(json['lowPrice']),
+      accumulatedTradingVolume: _readInt(json['accumulatedTradingVolume']),
     );
   }
 
@@ -151,8 +184,18 @@ class NaverHistoricalChartDto {
   factory NaverHistoricalChartDto.fromJson(Map<String, dynamic> json) {
     // TODO(assignment): Parse the chart wrapper and convert each priceInfos
     // entry with NaverHistoricalPriceDto.fromJson.
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverHistoricalChartDto.fromJson',
+
+    // priceInfos 배열을 List로 캐스팅 후
+    // 각 항목을 NaverHistoricalPriceDto.fromJson으로 변환
+    // map().toList() 패턴은 Dart에서 배열 변환할 때 표준 방식
+    final priceInfos = (json['priceInfos'] as List)
+        .map((e) => NaverHistoricalPriceDto.fromJson(e as Map<String, dynamic>))
+        .toList();
+
+    return NaverHistoricalChartDto(
+      symbol: _readString(json['code']),
+      periodType: _readString(json['periodType']),
+      priceInfos: priceInfos,
     );
   }
 
