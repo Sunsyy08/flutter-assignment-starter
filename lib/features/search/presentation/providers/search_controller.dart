@@ -9,7 +9,7 @@ import '../../../watchlist/domain/repositories/watchlist_repository.dart';
 import '../../../watchlist/presentation/providers/favorite_ids_controller.dart';
 
 final searchControllerProvider =
-    NotifierProvider<SearchController, SearchUiState>(SearchController.new);
+NotifierProvider<SearchController, SearchUiState>(SearchController.new);
 
 class SearchController extends Notifier<SearchUiState> {
   WatchlistRepository get _repository => ref.read(watchlistRepositoryProvider);
@@ -20,10 +20,14 @@ class SearchController extends Notifier<SearchUiState> {
   @override
   SearchUiState build() {
     ref.onDispose(() => _toastTimer?.cancel());
-    // TODO(assignment): favoriteIdsControllerProvider를 listen해서
-    // 즐겨찾기 상태가 바뀔 때마다 현재 검색 결과의 isFavorite를 다시 매핑하세요.
-    // 관련 테스트:
-    // - test/features/search/presentation/providers/search_controller_test.dart
+
+    // favoriteIdsControllerProvider를 listen해서
+    // 즐겨찾기 상태가 바뀔 때마다 현재 검색 결과의 isFavorite를 다시 매핑
+    // 예: 관심목록 화면에서 삭제해도 검색 결과 하트가 바로 반영됨
+    ref.listen(favoriteIdsControllerProvider, (previous, next) {
+      _applyFavoriteIds(next.valueOrNull);
+    });
+
     return const SearchUiState();
   }
 
@@ -46,8 +50,8 @@ class SearchController extends Notifier<SearchUiState> {
     final existingResults = state.results;
     final loadingResults = existingResults.hasValue
         ? const AsyncLoading<List<StockSearchItem>>().copyWithPrevious(
-            existingResults,
-          )
+      existingResults,
+    )
         : const AsyncLoading<List<StockSearchItem>>();
 
     state = state.copyWith(
@@ -58,18 +62,21 @@ class SearchController extends Notifier<SearchUiState> {
     );
 
     final result = await AsyncValue.guard(
-      () => _repository.searchStocks(query: trimmedQuery),
+          () => _repository.searchStocks(query: trimmedQuery),
     );
     if (currentRequestId != _requestSequence) {
       return;
     }
 
+    // 검색 결과가 나온 직후 현재 즐겨찾기 상태를 읽어서 isFavorite 동기화
+    // 검색 직후에도 하트 상태가 정확히 반영되도록
+    final currentFavoriteIds =
+        ref.read(favoriteIdsControllerProvider).valueOrNull;
+
     state = state.copyWith(
-      // TODO(assignment): favoriteIdsControllerProvider의 현재 값을 읽어서
-      // 첫 검색 결과에도 isFavorite가 반영되도록 연결하세요.
-      // 관련 테스트:
-      // - test/features/search/presentation/providers/search_controller_test.dart
-      results: result,
+      results: currentFavoriteIds != null
+          ? AsyncData(_applyFavorites(result.valueOrNull ?? [], currentFavoriteIds))
+          : result,
       selectedItemId: null,
     );
   }
@@ -110,10 +117,19 @@ class SearchController extends Notifier<SearchUiState> {
         .read(favoriteIdsControllerProvider.notifier)
         .toggle(item.id);
 
-    // TODO(assignment): toggle 이후 최신 favorite 상태를 현재 검색 결과에 다시
-    // 반영하고, 추가 시 토스트를 보여주고 제거 시 토스트를 닫으세요.
-    // 관련 테스트:
-    // - test/features/search/presentation/providers/search_controller_test.dart
+    // toggle 이후 최신 favorite 상태를 현재 검색 결과에 다시 반영
+    // 추가 시 토스트 표시, 제거 시 토스트 닫기
+    final currentFavoriteIds =
+        ref.read(favoriteIdsControllerProvider).valueOrNull;
+    _applyFavoriteIds(currentFavoriteIds);
+
+    if (isAdded) {
+      // 즐겨찾기 추가 시 토스트 표시
+      _showToast(const SearchToastData(message: '관심그룹에 추가되었습니다.'));
+    } else {
+      // 즐겨찾기 제거 시 토스트 숨김
+      dismissToast();
+    }
 
     return isAdded;
   }
@@ -126,22 +142,41 @@ class SearchController extends Notifier<SearchUiState> {
     state = state.copyWith(toast: null);
   }
 
-  // ignore: unused_element
   void _showToast(SearchToastData toast) {
     _toastTimer?.cancel();
     state = state.copyWith(toast: toast);
+    // 2초 후 자동으로 토스트 사라짐
     _toastTimer = Timer(const Duration(seconds: 2), dismissToast);
   }
 
-  // ignore: unused_element
   void _applyFavoriteIds(Set<String>? favoriteIds) {
-    // TODO(assignment): favoriteIds에 맞게 현재 results의 isFavorite를 다시 매핑하세요.
-    // selected item이 사라진 경우 selectedItemId도 정리해 주세요.
-    // 관련 테스트:
-    // - test/features/search/presentation/providers/search_controller_test.dart
-    if (favoriteIds == null) {
-      return;
-    }
+    // favoriteIds에 맞게 현재 results의 isFavorite를 다시 매핑
+    // 다른 화면에서 즐겨찾기가 바뀌어도 검색 결과에 즉시 반영됨
+    if (favoriteIds == null) return;
+
+    final currentResults = state.results.valueOrNull;
+    if (currentResults == null) return;
+
+    final updatedResults = _applyFavorites(currentResults, favoriteIds);
+
+    // 즐겨찾기에서 제거된 경우 선택 상태도 정리
+    final selectedStillFavorite = state.selectedItemId == null ||
+        updatedResults.any((item) => item.id == state.selectedItemId);
+
+    state = state.copyWith(
+      results: AsyncData(updatedResults),
+      selectedItemId: selectedStillFavorite ? state.selectedItemId : null,
+    );
+  }
+
+  // 검색 결과 리스트에 즐겨찾기 상태를 적용하는 헬퍼
+  List<StockSearchItem> _applyFavorites(
+      List<StockSearchItem> results,
+      Set<String> favoriteIds,
+      ) {
+    return results
+        .map((item) => item.copyWith(isFavorite: favoriteIds.contains(item.id)))
+        .toList();
   }
 }
 

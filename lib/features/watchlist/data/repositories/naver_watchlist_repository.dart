@@ -20,8 +20,8 @@ class NaverWatchlistRepository implements WatchlistRepository {
     this.realtimeCacheTtl = const Duration(seconds: 10),
     this.dailyHistoryFetchBatchSize = 4,
   }) : _client = client ?? NaverDomesticStockClient(dio),
-       _favoriteIdsLocalStore = favoriteIdsLocalStore,
-       _logoUrlResolver = logoUrlResolver ?? const NaverStockLogoUrlResolver();
+        _favoriteIdsLocalStore = favoriteIdsLocalStore,
+        _logoUrlResolver = logoUrlResolver ?? const NaverStockLogoUrlResolver();
 
   static const _historyRowsPerPage = 10;
 
@@ -42,35 +42,118 @@ class NaverWatchlistRepository implements WatchlistRepository {
   Future<WatchlistSnapshot> fetchWatchlist({DateTime? asOf}) async {
     // TODO(assignment): Build the watchlist snapshot from Naver data.
     //
-    // Suggested flow:
-    // 1. Load canonical favorite ids via loadFavoriteIds().
-    // 2. Convert each id into a six-digit domestic symbol.
-    // 3. Load metadata and realtime quotes for those symbols.
-    // 4. When asOf is null, use the latest historical row for each symbol.
-    // 5. When asOf is provided, resolve the selected trading day and build a
-    //    one-day snapshot for that date.
-    // 6. Map every symbol into WatchlistItem.
-    //
-    // Related tests:
-    // - test/features/watchlist/data/naver_watchlist_repository_test.dart
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverWatchlistRepository.fetchWatchlist',
-    );
+    // 1. 즐겨찾기 id 로드 → 심볼 추출
+    // 2. 메타데이터 + 실시간 시세 로드
+    // 3. asOf가 null이면 최신 데이터, 있으면 해당 날짜 데이터 사용
+    // 4. WatchlistItem 리스트로 변환
+    final favoriteIds = await loadFavoriteIds();
+    final symbols = favoriteIds
+        .map((id) => domesticSymbolFromFavoriteId(id))
+        .whereType<String>()
+        .toList();
+
+    if (symbols.isEmpty) {
+      return WatchlistSnapshot(
+        items: [],
+        asOf: normalizeAsOfDate(asOf ?? DateTime.now()),
+      );
+    }
+
+    final metadataMap = await _loadMetadataBatch(symbols);
+    final realtimeQuotes = await _loadRealtimeQuotes(symbols);
+
+    // 최신 날짜 기준으로 실시간 데이터 적용 여부 판단
+    final firstPage = await _loadDailyHistoryPage(symbols.first, 1);
+    final latestDate = firstPage.priceInfos.isNotEmpty
+        ? normalizeAsOfDate(firstPage.priceInfos.first.localDate)
+        : null;
+
+    final items = <WatchlistItem>[];
+    for (final symbol in symbols) {
+      final metadata = metadataMap[symbol];
+      if (metadata == null) continue;
+
+      final _HistoricalEntry? entry;
+      if (asOf == null) {
+        entry = await _loadLatestHistoricalEntry(symbol);
+      } else {
+        final availableDates = await fetchAvailableDates();
+        entry = await _loadHistoricalEntryForDate(
+          symbol: symbol,
+          availableDates: availableDates,
+          asOf: asOf,
+        );
+      }
+
+      if (entry == null) continue;
+
+      items.add(
+        _buildWatchlistItem(
+          symbol: symbol,
+          metadata: metadata,
+          historicalEntry: entry,
+          realtimeQuote: realtimeQuotes[symbol],
+          latestDate: latestDate,
+        ),
+      );
+    }
+
+    final resolvedAsOf = asOf != null
+        ? normalizeAsOfDate(asOf)
+        : (latestDate ?? normalizeAsOfDate(DateTime.now()));
+
+    return WatchlistSnapshot(items: items, asOf: resolvedAsOf);
   }
 
   @override
   Future<List<DateTime>> fetchAvailableDates() async {
     // TODO(assignment): Lazily load and cache the trading-day list.
     //
-    // Suggested flow:
-    // - Reuse _availableDatesCache when present.
-    // - Pick the first valid favorite symbol as the reference symbol.
-    // - Request page 1 first to discover lastPage.
-    // - Fetch the remaining pages in small batches.
-    // - Flatten all localDate values into one descending list.
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverWatchlistRepository.fetchAvailableDates',
-    );
+    // 캐시가 있으면 재사용
+    // 첫 번째 즐겨찾기 심볼로 page 1 요청 → lastPage 확인
+    // 남은 페이지를 배치로 나눠서 fetch
+    // 모든 날짜를 내림차순으로 정렬해서 반환
+    if (_availableDatesCache != null) return _availableDatesCache!;
+
+    final favoriteIds = await loadFavoriteIds();
+    final symbol = favoriteIds
+        .map((id) => domesticSymbolFromFavoriteId(id))
+        .whereType<String>()
+        .firstOrNull;
+
+    if (symbol == null) return [];
+
+    final firstPage = await _loadDailyHistoryPage(symbol, 1);
+    final lastPage = firstPage.lastPage;
+
+    final allDates = <DateTime>[
+      ...firstPage.priceInfos.map((e) => e.localDate),
+    ];
+
+    // 남은 페이지를 배치 단위로 fetch
+    for (
+    var page = 2;
+    page <= lastPage;
+    page += dailyHistoryFetchBatchSize
+    ) {
+      final batch = <Future<NaverDailyHistoryPageDto>>[];
+      for (
+      var i = page;
+      i < page + dailyHistoryFetchBatchSize && i <= lastPage;
+      i++
+      ) {
+        batch.add(_loadDailyHistoryPage(symbol, i));
+      }
+      final pages = await Future.wait(batch);
+      for (final p in pages) {
+        allDates.addAll(p.priceInfos.map((e) => e.localDate));
+      }
+    }
+
+    // 내림차순 정렬 (최신 날짜가 앞)
+    allDates.sort((a, b) => b.compareTo(a));
+    _availableDatesCache = allDates;
+    return allDates;
   }
 
   @override
@@ -79,17 +162,105 @@ class NaverWatchlistRepository implements WatchlistRepository {
     required MarketType market,
     DateTime? asOf,
   }) async {
-    // TODO(assignment): Build the detail panel from a 30-trading-day window.
-    //
-    // Requirements:
-    // - Only domestic stocks are supported.
-    // - When asOf is null, show the latest available detail.
-    // - When asOf is set, resolve the requested trading day and collect the
-    //   previous 30 trading days (including the selected day).
-    // - Use realtime data only for the latest trading day.
-    // - Compute changeAmount, changeRate, volumeRatio, and candles.
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverWatchlistRepository.fetchWatchlistDetail',
+    // 국내 주식만 지원
+    // asOf 기준으로 직전 30거래일 데이터 수집
+    // 최신 날짜에만 실시간 데이터 사용
+    if (market != MarketType.domestic) {
+      throw UnsupportedError('Only domestic market is supported');
+    }
+
+    final availableDates = await fetchAvailableDates();
+    final resolvedAsOf = _resolveAsOf(availableDates, asOf);
+    final selectedIndex = _indexOfDate(availableDates, resolvedAsOf) ?? 0;
+
+    const windowSize = 30;
+    final windowDates = availableDates.skip(selectedIndex).take(windowSize).toList();
+
+    final pageNumbers = windowDates
+        .asMap()
+        .keys
+        .map((i) => _pageNumberForIndex(selectedIndex + i))
+        .toSet();
+
+    final rowsByDate = <String, NaverHistoricalPriceDto>{};
+    for (final pageNum in pageNumbers) {
+      final page = await _loadDailyHistoryPage(symbol, pageNum);
+      for (final row in page.priceInfos) {
+        rowsByDate[_dateKey(row.localDate)] = row;
+      }
+    }
+
+    final selectedRow = rowsByDate[_dateKey(resolvedAsOf)];
+    if (selectedRow == null) {
+      throw StateError('No data for $symbol on $resolvedAsOf');
+    }
+
+    final previousClose = await _resolvePreviousClose(
+      symbol: symbol,
+      availableDates: availableDates,
+      selectedIndex: selectedIndex,
+      fallbackOpenPrice: selectedRow.openPrice,
+      rowsByDate: rowsByDate,
+    );
+
+    final latestDate = availableDates.isNotEmpty ? availableDates.first : null;
+    final isLatest = latestDate != null && resolvedAsOf == latestDate;
+    final realtimeQuotes = isLatest
+        ? await _loadRealtimeQuotes([symbol])
+        : <String, NaverRealtimeQuoteDto>{};
+    final realtimeQuote = realtimeQuotes[symbol];
+
+    final currentPrice = isLatest && realtimeQuote != null
+        ? realtimeQuote.currentPrice
+        : selectedRow.closePrice;
+    final changeAmount = currentPrice - previousClose;
+    final changeRate = _percentChange(changeAmount, previousClose);
+
+    // 시가/고가/저가 등락률 계산
+    final openChangeRate = _percentChange(
+      selectedRow.openPrice - previousClose,
+      previousClose,
+    );
+    final highChangeRate = _percentChange(
+      selectedRow.highPrice - previousClose,
+      previousClose,
+    );
+    final lowChangeRate = _percentChange(
+      selectedRow.lowPrice - previousClose,
+      previousClose,
+    );
+
+    final tradeVolume = isLatest && realtimeQuote != null
+        ? realtimeQuote.accumulatedTradingVolume
+        : selectedRow.accumulatedTradingVolume;
+
+    final volumeRatio = _volumeRatio(
+      windowDatesDescending: windowDates,
+      rowsByDate: rowsByDate,
+    );
+
+    final candles = _candles(
+      windowDatesDescending: windowDates,
+      rowsByDate: rowsByDate,
+    );
+
+    return WatchlistDetail(
+      itemId: canonicalDomesticFavoriteId(symbol),
+      symbol: symbol,
+      market: MarketType.domestic,
+      currency: 'KRW',
+      currentPrice: currentPrice,
+      changeAmount: changeAmount,
+      changeRate: changeRate,
+      tradeVolume: tradeVolume,
+      volumeRatio: volumeRatio,
+      openPrice: selectedRow.openPrice,
+      openChangeRate: openChangeRate,
+      highPrice: selectedRow.highPrice,
+      highChangeRate: highChangeRate,
+      lowPrice: selectedRow.lowPrice,
+      lowChangeRate: lowChangeRate,
+      candles: candles,
     );
   }
 
@@ -98,17 +269,38 @@ class NaverWatchlistRepository implements WatchlistRepository {
     // TODO(assignment): Search domestic stocks and convert them into
     // StockSearchItem values.
     //
-    // Requirements:
-    // - Trim the query and return [] for empty input.
-    // - Use _client.searchStocks(trimmedQuery).
-    // - Keep only domestic six-digit stock results.
-    // - Deduplicate duplicate symbols.
-    // - Convert every symbol into canonical id: domestic:{symbol}
-    // - Set isFavorite by comparing against loadFavoriteIds().
-    // - Fill logoUrl via _logoUrlResolver.
-    throw UnimplementedError(
-      'TODO(assignment): implement NaverWatchlistRepository.searchStocks',
-    );
+    // 빈 쿼리는 빈 리스트 반환
+    // 국내 6자리 종목만 필터링, 중복 제거
+    // canonical id: domestic:{symbol} 형태로 변환
+    // isFavorite 플래그 설정
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
+
+    final results = await _client.searchStocks(trimmed);
+    final favoriteIds = await loadFavoriteIds();
+
+    final seenSymbols = <String>{};
+    final items = <StockSearchItem>[];
+
+    for (final dto in results) {
+      if (!dto.isDomesticStock) continue;
+      if (!seenSymbols.add(dto.code)) continue;
+
+      final canonicalId = canonicalDomesticFavoriteId(dto.code);
+      items.add(
+        StockSearchItem(
+          id: canonicalId,
+          market: MarketType.domestic,
+          marketLabel: dto.typeName,
+          symbol: dto.code,
+          name: dto.name,
+          isFavorite: favoriteIds.contains(canonicalId),
+          logoUrl: _logoUrlResolver.resolveDomesticStockLogoUrl(dto.code),
+        ),
+      );
+    }
+
+    return items;
   }
 
   @override
@@ -154,8 +346,8 @@ class NaverWatchlistRepository implements WatchlistRepository {
   }
 
   Future<Map<String, NaverChartMetadataDto>> _loadMetadataBatch(
-    List<String> symbols,
-  ) async {
+      List<String> symbols,
+      ) async {
     final results = <String, NaverChartMetadataDto>{};
     for (final symbol in symbols) {
       try {
@@ -169,25 +361,19 @@ class NaverWatchlistRepository implements WatchlistRepository {
 
   Future<NaverChartMetadataDto> _loadMetadata(String symbol) async {
     final cached = _metadataCache[symbol];
-    if (cached != null) {
-      return cached;
-    }
-
+    if (cached != null) return cached;
     final metadata = await _client.fetchChartMetadata(symbol);
     _metadataCache[symbol] = metadata;
     return metadata;
   }
 
   Future<NaverDailyHistoryPageDto> _loadDailyHistoryPage(
-    String symbol,
-    int page,
-  ) async {
+      String symbol,
+      int page,
+      ) async {
     final cacheKey = _dailyHistoryPageCacheKey(symbol, page);
     final cached = _dailyHistoryPageCache[cacheKey];
-    if (cached != null) {
-      return cached;
-    }
-
+    if (cached != null) return cached;
     final historyPage = await _client.fetchDailyHistoryPage(
       symbol: symbol,
       page: page,
@@ -197,8 +383,8 @@ class NaverWatchlistRepository implements WatchlistRepository {
   }
 
   Future<Map<String, NaverRealtimeQuoteDto>> _loadRealtimeQuotes(
-    Iterable<String> symbols,
-  ) async {
+      Iterable<String> symbols,
+      ) async {
     final requestedSymbols = symbols.toSet();
     final now = DateTime.now();
     final missingSymbols = <String>[];
@@ -208,7 +394,7 @@ class NaverWatchlistRepository implements WatchlistRepository {
       final cached = _realtimeQuoteCache[symbol];
       final isFresh =
           cached != null &&
-          now.difference(cached.fetchedAt) <= realtimeCacheTtl;
+              now.difference(cached.fetchedAt) <= realtimeCacheTtl;
       if (isFresh) {
         quotes[symbol] = cached.quote;
       } else {
@@ -230,7 +416,7 @@ class NaverWatchlistRepository implements WatchlistRepository {
       } catch (error, stackTrace) {
         debugPrint(
           'Falling back to historical-only Naver data for realtime batch: '
-          '$error\n$stackTrace',
+              '$error\n$stackTrace',
         );
       }
     }
@@ -244,19 +430,12 @@ class NaverWatchlistRepository implements WatchlistRepository {
     required DateTime asOf,
   }) async {
     final selectedIndex = _indexOfDate(availableDates, asOf);
-    if (selectedIndex == null) {
-      return null;
-    }
+    if (selectedIndex == null) return null;
 
     final selectedPageNumber = _pageNumberForIndex(selectedIndex);
-    final selectedPage = await _loadDailyHistoryPage(
-      symbol,
-      selectedPageNumber,
-    );
+    final selectedPage = await _loadDailyHistoryPage(symbol, selectedPageNumber);
     final selectedRow = _rowForDate(selectedPage.priceInfos, asOf);
-    if (selectedRow == null) {
-      return null;
-    }
+    if (selectedRow == null) return null;
 
     final previousClose = await _resolvePreviousClose(
       symbol: symbol,
@@ -273,9 +452,7 @@ class NaverWatchlistRepository implements WatchlistRepository {
 
   Future<_HistoricalEntry?> _loadLatestHistoricalEntry(String symbol) async {
     final firstPage = await _loadDailyHistoryPage(symbol, 1);
-    if (firstPage.priceInfos.isEmpty) {
-      return null;
-    }
+    if (firstPage.priceInfos.isEmpty) return null;
 
     final selectedRow = firstPage.priceInfos.first;
     double previousClose = selectedRow.openPrice;
@@ -298,15 +475,11 @@ class NaverWatchlistRepository implements WatchlistRepository {
     required double fallbackOpenPrice,
     required Map<String, NaverHistoricalPriceDto> rowsByDate,
   }) async {
-    if (selectedIndex >= availableDates.length - 1) {
-      return fallbackOpenPrice;
-    }
+    if (selectedIndex >= availableDates.length - 1) return fallbackOpenPrice;
 
     final previousDate = availableDates[selectedIndex + 1];
     final previousRowFromCache = rowsByDate[_dateKey(previousDate)];
-    if (previousRowFromCache != null) {
-      return previousRowFromCache.closePrice;
-    }
+    if (previousRowFromCache != null) return previousRowFromCache.closePrice;
 
     final page = await _loadDailyHistoryPage(
       symbol,
@@ -325,23 +498,22 @@ class NaverWatchlistRepository implements WatchlistRepository {
   }) {
     final isLatest =
         latestDate != null &&
-        normalizeAsOfDate(historicalEntry.row.localDate) == latestDate;
+            normalizeAsOfDate(historicalEntry.row.localDate) == latestDate;
     final currentPrice = isLatest && realtimeQuote != null
         ? realtimeQuote.currentPrice
         : historicalEntry.row.closePrice;
     final changeRate = isLatest && realtimeQuote != null
         ? realtimeQuote.changeRate
         : _percentChange(
-            currentPrice - historicalEntry.previousClose,
-            historicalEntry.previousClose,
-          );
+      currentPrice - historicalEntry.previousClose,
+      historicalEntry.previousClose,
+    );
     final tradeVolume = isLatest && realtimeQuote != null
         ? realtimeQuote.accumulatedTradingVolume
         : historicalEntry.row.accumulatedTradingVolume;
     final marketCap = realtimeQuote == null
         ? 0
-        : (realtimeQuote.countOfListedStock * realtimeQuote.currentPrice)
-              .round();
+        : (realtimeQuote.countOfListedStock * realtimeQuote.currentPrice).round();
 
     return WatchlistItem(
       id: canonicalDomesticFavoriteId(symbol),
@@ -357,51 +529,36 @@ class NaverWatchlistRepository implements WatchlistRepository {
     );
   }
 
-  DateTime _resolveAsOf(
-    List<DateTime> availableDates,
-    DateTime? requestedAsOf,
-  ) {
+  DateTime _resolveAsOf(List<DateTime> availableDates, DateTime? requestedAsOf) {
     if (availableDates.isEmpty) {
       return normalizeAsOfDate(requestedAsOf ?? DateTime.now());
     }
-
-    if (requestedAsOf == null) {
-      return availableDates.first;
-    }
+    if (requestedAsOf == null) return availableDates.first;
 
     final normalizedAsOf = normalizeAsOfDate(requestedAsOf);
     for (final date in availableDates) {
-      if (date == normalizedAsOf) {
-        return date;
-      }
+      if (date == normalizedAsOf) return date;
     }
-
     return availableDates.first;
   }
 
   int? _indexOfDate(List<DateTime> availableDates, DateTime asOf) {
     final normalizedAsOf = normalizeAsOfDate(asOf);
     for (var index = 0; index < availableDates.length; index += 1) {
-      if (availableDates[index] == normalizedAsOf) {
-        return index;
-      }
+      if (availableDates[index] == normalizedAsOf) return index;
     }
     return null;
   }
 
-  int _pageNumberForIndex(int index) {
-    return (index ~/ _historyRowsPerPage) + 1;
-  }
+  int _pageNumberForIndex(int index) => (index ~/ _historyRowsPerPage) + 1;
 
   NaverHistoricalPriceDto? _rowForDate(
-    Iterable<NaverHistoricalPriceDto> rows,
-    DateTime date,
-  ) {
+      Iterable<NaverHistoricalPriceDto> rows,
+      DateTime date,
+      ) {
     final dateKey = _dateKey(date);
     for (final row in rows) {
-      if (_dateKey(row.localDate) == dateKey) {
-        return row;
-      }
+      if (_dateKey(row.localDate) == dateKey) return row;
     }
     return null;
   }
@@ -410,37 +567,27 @@ class NaverWatchlistRepository implements WatchlistRepository {
     required List<DateTime> windowDatesDescending,
     required Map<String, NaverHistoricalPriceDto> rowsByDate,
   }) {
-    if (windowDatesDescending.isEmpty) {
-      return 0;
-    }
+    if (windowDatesDescending.isEmpty) return 0;
 
     final selectedRow = rowsByDate[_dateKey(windowDatesDescending.first)];
-    if (selectedRow == null) {
-      return 0;
-    }
+    if (selectedRow == null) return 0;
 
     final previousVolumes = <int>[];
     for (
-      var index = 1;
-      index < windowDatesDescending.length && previousVolumes.length < 5;
-      index += 1
+    var index = 1;
+    index < windowDatesDescending.length && previousVolumes.length < 5;
+    index += 1
     ) {
       final row = rowsByDate[_dateKey(windowDatesDescending[index])];
-      if (row != null) {
-        previousVolumes.add(row.accumulatedTradingVolume);
-      }
+      if (row != null) previousVolumes.add(row.accumulatedTradingVolume);
     }
 
-    if (previousVolumes.isEmpty) {
-      return 0;
-    }
+    if (previousVolumes.isEmpty) return 0;
 
     final averageVolume =
         previousVolumes.reduce((left, right) => left + right) /
-        previousVolumes.length;
-    if (averageVolume == 0) {
-      return 0;
-    }
+            previousVolumes.length;
+    if (averageVolume == 0) return 0;
 
     return double.parse(
       (selectedRow.accumulatedTradingVolume / averageVolume).toStringAsFixed(2),
@@ -456,20 +603,19 @@ class NaverWatchlistRepository implements WatchlistRepository {
         .whereType<NaverHistoricalPriceDto>()
         .map(
           (item) => CandlePoint(
-            time: item.localDate,
-            open: item.openPrice,
-            high: item.highPrice,
-            low: item.lowPrice,
-            close: item.closePrice,
-            direction: directionFromDelta(item.closePrice - item.openPrice),
-          ),
-        )
+        time: item.localDate,
+        open: item.openPrice,
+        high: item.highPrice,
+        low: item.lowPrice,
+        close: item.closePrice,
+        direction: directionFromDelta(item.closePrice - item.openPrice),
+      ),
+    )
         .toList(growable: false);
   }
 
-  bool _isCanonicalFavoriteId(String itemId) {
-    return domesticSymbolFromFavoriteId(itemId) != null;
-  }
+  bool _isCanonicalFavoriteId(String itemId) =>
+      domesticSymbolFromFavoriteId(itemId) != null;
 
   String _requireCanonicalFavoriteId(String itemId) {
     final symbol = domesticSymbolFromFavoriteId(itemId);
@@ -488,9 +634,7 @@ class NaverWatchlistRepository implements WatchlistRepository {
   String _dateKey(DateTime value) => formatApiDate(value);
 
   double _percentChange(double delta, double base) {
-    if (base == 0) {
-      return 0;
-    }
+    if (base == 0) return 0;
     return double.parse(((delta / base) * 100).toStringAsFixed(2));
   }
 }
