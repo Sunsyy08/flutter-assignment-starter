@@ -129,6 +129,11 @@ class _WatchlistScreenState extends ConsumerState<WatchlistScreen> {
 
     // TODO(assignment): Apply the selected trading day to the watchlist
     // controller and refresh the selected detail so list/detail stay in sync.
+    //
+    // 선택한 날짜를 watchlistController에 적용하고
+    // 상세 패널도 같은 날짜 기준으로 다시 갱신
+    await ref.read(watchlistControllerProvider.notifier).setAsOf(normalizedDate);
+    await _syncSelectedDetailWithSnapshot();
   }
 
   Future<void> _handleActionTap(WatchlistItem item, String action) async {
