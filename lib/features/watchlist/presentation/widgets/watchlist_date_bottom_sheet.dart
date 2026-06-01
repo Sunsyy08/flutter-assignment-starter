@@ -87,29 +87,21 @@ class _WatchlistDateBottomSheetState extends State<WatchlistDateBottomSheet> {
   }
 
   List<int> get _years => _options.years;
-
   List<int> get _months => _options.monthsForYear(_selectedYear);
-
   List<int> get _days =>
       _options.daysForMonth(year: _selectedYear, month: _selectedMonth);
 
   int _yearIndex(int year) => _years.indexOf(year).clamp(0, _years.length - 1);
-
   int _monthIndex(int month) =>
       _months.indexOf(month).clamp(0, _months.length - 1);
-
   int _dayIndex(int day) => _days.indexOf(day).clamp(0, _days.length - 1);
 
   void _scheduleWheelSync({bool syncMonth = false, bool syncDay = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-
+      if (!mounted) return;
       if (syncMonth && _monthController.hasClients) {
         _monthController.jumpToItem(_monthIndex(_selectedMonth));
       }
-
       if (syncDay && _dayController.hasClients) {
         _dayController.jumpToItem(_dayIndex(_selectedDay));
       }
@@ -118,9 +110,7 @@ class _WatchlistDateBottomSheetState extends State<WatchlistDateBottomSheet> {
 
   void _selectYear(int index) {
     final year = _years[index];
-    if (year == _selectedYear) {
-      return;
-    }
+    if (year == _selectedYear) return;
 
     var shouldSyncMonth = false;
     setState(() {
@@ -133,15 +123,12 @@ class _WatchlistDateBottomSheetState extends State<WatchlistDateBottomSheet> {
         _selectedDay = _days.first;
       }
     });
-
     _scheduleWheelSync(syncMonth: shouldSyncMonth, syncDay: true);
   }
 
   void _selectMonth(int index) {
     final month = _months[index];
-    if (month == _selectedMonth) {
-      return;
-    }
+    if (month == _selectedMonth) return;
 
     setState(() {
       _selectedMonth = month;
@@ -149,16 +136,12 @@ class _WatchlistDateBottomSheetState extends State<WatchlistDateBottomSheet> {
         _selectedDay = _days.first;
       }
     });
-
     _scheduleWheelSync(syncDay: true);
   }
 
   void _selectDay(int index) {
     final day = _days[index];
-    if (day == _selectedDay) {
-      return;
-    }
-
+    if (day == _selectedDay) return;
     setState(() {
       _selectedDay = day;
     });
@@ -200,11 +183,7 @@ class _WatchlistDateBottomSheetState extends State<WatchlistDateBottomSheet> {
   @override
   Widget build(BuildContext context) {
     // TODO(assignment): Rebuild the date bottom sheet body to match Figma.
-    // Suggested scope:
-    // - header
-    // - year / month / day picker area
-    // - selected state styling
-    // - cancel / confirm CTA row
+    // 피그마 기준: 연/월/일 3열 picker + 선택 상태 스타일 + 취소/확인 버튼
     return SafeArea(
       top: false,
       child: Align(
@@ -213,33 +192,70 @@ class _WatchlistDateBottomSheetState extends State<WatchlistDateBottomSheet> {
           key: const Key('watchlist-date-sheet'),
           decoration: BoxDecoration(
             color: AppColors.bg.bg_2_212121,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // 헤더
               SizedBox(
                 height: 56,
                 child: Padding(
-                  padding: EdgeInsets.only(left: 24),
+                  padding: const EdgeInsets.only(left: 24),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text('날짜 선택', style: AppTypography.sheetTitle),
                   ),
                 ),
               ),
+              // 연/월/일 picker 영역
+              // 3열로 나란히 배치, 각각 독립적인 스크롤
               SizedBox(
                 height: _pickerHeight,
-                child: Center(
-                  child: Text(
-                    'TODO(assignment): WatchlistDateBottomSheet body를 재구성하세요.',
-                    key: const Key('watchlist-date-placeholder'),
-                    style: AppTypography.searchMeta,
-                    textAlign: TextAlign.center,
-                  ),
+                child: Row(
+                  children: [
+                    // 연도 picker
+                    Expanded(
+                      child: _DateWheelPicker(
+                        pickerKey: const Key('watchlist-date-picker-year'),
+                        itemKeyPrefix: 'watchlist-date-item-year',
+                        controller: _yearController,
+                        values: _years,
+                        selectedValue: _selectedYear,
+                        // 연도는 숫자 그대로 표시
+                        formatter: (value) => '$value년',
+                        onSelectedItemChanged: _selectYear,
+                      ),
+                    ),
+                    // 월 picker
+                    Expanded(
+                      child: _DateWheelPicker(
+                        pickerKey: const Key('watchlist-date-picker-month'),
+                        itemKeyPrefix: 'watchlist-date-item-month',
+                        controller: _monthController,
+                        values: _months,
+                        selectedValue: _selectedMonth,
+                        formatter: (value) => '$value월',
+                        onSelectedItemChanged: _selectMonth,
+                      ),
+                    ),
+                    // 일 picker
+                    Expanded(
+                      child: _DateWheelPicker(
+                        pickerKey: const Key('watchlist-date-picker-day'),
+                        itemKeyPrefix: 'watchlist-date-item-day',
+                        controller: _dayController,
+                        values: _days,
+                        selectedValue: _selectedDay,
+                        formatter: (value) => '$value일',
+                        onSelectedItemChanged: _selectDay,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 32),
+              // 취소/확인 버튼
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Row(
@@ -249,14 +265,14 @@ class _WatchlistDateBottomSheetState extends State<WatchlistDateBottomSheet> {
                         buttonKey: const Key('watchlist-date-cancel'),
                         label: '취소',
                         backgroundColor: AppColors.bg.bg_4_333333,
-                        onTap: () => Navigator.of(context).pop(),
+                        onTap: _dismiss,
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: _SheetButton(
                         buttonKey: const Key('watchlist-date-confirm'),
-                        label: '매수',
+                        label: '확인',
                         backgroundColor: AppColors.mainAndAccent.primary_ff8a00,
                         onTap: _confirm,
                       ),
@@ -294,17 +310,9 @@ class WatchlistDateBottomSheetController {
     _dismiss = null;
   }
 
-  void selectDate(DateTime value) {
-    _selectDate?.call(value);
-  }
-
-  void confirm() {
-    _confirm?.call();
-  }
-
-  void dismiss() {
-    _dismiss?.call();
-  }
+  void selectDate(DateTime value) => _selectDate?.call(value);
+  void confirm() => _confirm?.call();
+  void dismiss() => _dismiss?.call();
 }
 
 class _DateWheelPicker extends StatelessWidget {
@@ -363,6 +371,7 @@ class _DateWheelPicker extends StatelessWidget {
                   height: 40,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
+                    // 선택된 항목은 배경색 표시
                     color: isSelected
                         ? AppColors.bg.bg_4_333333
                         : Colors.transparent,
@@ -373,13 +382,14 @@ class _DateWheelPicker extends StatelessWidget {
                     key: Key('$itemKeyPrefix-$value'),
                     style: tabularTextStyle(
                       (isSelected
-                              ? AppTypography.sheetPickerValue
-                              : AppTypography.sheetOption)
+                          ? AppTypography.sheetPickerValue
+                          : AppTypography.sheetOption)
                           .copyWith(
-                            color: isSelected
-                                ? AppColors.text.text_fafafa
-                                : AppColors.text.text_3_9e9e9e,
-                          ),
+                        // 선택된 항목은 흰색, 나머지는 회색
+                        color: isSelected
+                            ? AppColors.text.text_fafafa
+                            : AppColors.text.text_3_9e9e9e,
+                      ),
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -416,7 +426,9 @@ class _SheetButton extends StatelessWidget {
         style: TextButton.styleFrom(
           backgroundColor: backgroundColor,
           foregroundColor: AppColors.text.text_fafafa,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
         ),
         child: Text(
           label,
